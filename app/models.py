@@ -14,6 +14,15 @@ class WeatherForecast(BaseModel):
     temperature_high_c: float
     temperature_low_c: float
     precipitation_chance_pct: int
+    is_historical_estimate: bool = Field(
+        default=False,
+        description=(
+            "True when the date was beyond Open-Meteo's forecast horizon and these "
+            "values are a typical/seasonal estimate from past years' data instead of "
+            "an actual forecast -- phrase advice accordingly (e.g. 'typically around', "
+            "not 'it will be')."
+        ),
+    )
 
 
 class PointOfInterest(BaseModel):
@@ -23,6 +32,12 @@ class PointOfInterest(BaseModel):
     indoor: bool
     estimated_cost: float
     currency: str
+
+
+class NearbyRestaurant(BaseModel):
+    name: str
+    cuisine: str | None = None
+    address: str | None = None
 
 
 class CurrencyConversionResult(BaseModel):
@@ -46,10 +61,24 @@ class TripRequestValidation(BaseModel):
     reasoning: str
 
 
+class PlaceFacts(BaseModel):
+    place: str
+    extract: str
+    source_url: str | None = None
+
+
+class ItineraryActivity(BaseModel):
+    time: str = Field(description='Clock time, e.g. "9:00 AM".')
+    description: str
+    fun_fact: str | None = Field(
+        default=None, description="A short, sourced fact about the place, if one was found."
+    )
+
+
 class ItineraryDay(BaseModel):
     date: str
     summary: str
-    activities: list[str]
+    activities: list[ItineraryActivity]
     estimated_cost: float
 
 

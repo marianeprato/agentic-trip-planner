@@ -31,11 +31,36 @@ def _find_dates(text: str) -> list[date]:
     return found
 
 
+def _latest_user_text(input_data: str | list) -> str:
+    """Once a session has history, `input_data` is the *entire* conversation
+    (every prior turn, including internal message ids and the agent's own
+    JSON replies), not just the new message -- stringifying all of that and
+    scanning it for dates is both wrong (validates old turns, not this one)
+    and flaky (message ids can coincidentally contain digit runs). Only the
+    user's latest message is what should be checked.
+    """
+    if isinstance(input_data, str):
+        return input_data
+
+    for item in reversed(input_data):
+        role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
+        if role != "user":
+            continue
+        content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [p.get("text") for p in content if isinstance(p, dict) and p.get("text")]
+            if parts:
+                return " ".join(parts)
+    return ""
+
+
 @input_guardrail(run_in_parallel=False)
 async def validate_trip_request(
     ctx: RunContextWrapper, agent: Agent, input_text: str | list
 ) -> GuardrailFunctionOutput:
-    text = input_text if isinstance(input_text, str) else str(input_text)
+    text = _latest_user_text(input_text)
 
     dates = _find_dates(text)
     if len(dates) >= 2:

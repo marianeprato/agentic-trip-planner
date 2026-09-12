@@ -13,6 +13,8 @@ from app.context import TripContext
 from app.guardrails.input_guardrails import validate_trip_request
 from app.guardrails.output_guardrails import validate_budget_compliance
 from app.models import PlannerResponse
+from app.tools.facts import get_place_facts
+from app.tools.restaurants import get_nearby_restaurants
 from app.tools.trip_details import update_trip_details
 from app.tools.weather import get_weather_forecast
 
@@ -20,7 +22,7 @@ triage_agent = Agent[TripContext](
     name="Triage Agent",
     instructions=TRIAGE_INSTRUCTIONS,
     model=OPENAI_MODEL,
-    tools=[get_weather_forecast, update_trip_details],
+    tools=[get_weather_forecast, update_trip_details, get_place_facts, get_nearby_restaurants],
     handoffs=[],  # populated in app/agents/__init__.py
     output_type=PlannerResponse,
     input_guardrails=[validate_trip_request],

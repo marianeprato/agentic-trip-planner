@@ -29,6 +29,7 @@ class TripContext:
     running_spent: float = 0.0
     spend_log: list[BudgetLineItem] = field(default_factory=list)
     preferences: list[str] = field(default_factory=list)
+    is_returning_visitor: bool | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -43,6 +44,7 @@ class TripContext:
                 for i in self.spend_log
             ],
             "preferences": self.preferences,
+            "is_returning_visitor": self.is_returning_visitor,
         }
 
     @classmethod
@@ -59,4 +61,5 @@ class TripContext:
                 for i in data.get("spend_log", [])
             ],
             preferences=data.get("preferences", []),
+            is_returning_visitor=data.get("is_returning_visitor"),
         )

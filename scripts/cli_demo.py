@@ -64,7 +64,9 @@ async def main() -> None:
                 for day in itinerary.days:
                     print(f"  - {day.date}: {day.summary} (~{day.estimated_cost} {itinerary.currency})")
                     for activity in day.activities:
-                        print(f"      * {activity}")
+                        print(f"      {activity.time} - {activity.description}")
+                        if activity.fun_fact:
+                            print(f"          Fun fact: {activity.fun_fact}")
                 print(f"  Total estimated cost: {itinerary.total_estimated_cost} {itinerary.currency}")
                 print(f"  Within budget: {itinerary.within_budget}\n")
     finally:
