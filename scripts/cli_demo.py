@@ -13,7 +13,7 @@ import uuid
 
 from agents import InputGuardrailTripwireTriggered, OutputGuardrailTripwireTriggered, Runner
 
-from app.agents import triage_agent
+from app.agents import sync_prompts_from_opik, triage_agent
 from app.config import require_openai_api_key
 from app.models import PlannerResponse
 from app.sessions import close_client, create_session, get_context, get_session, save_context
@@ -23,6 +23,7 @@ from app.tracing import configure_tracing
 async def main() -> None:
     require_openai_api_key()
     configure_tracing()
+    sync_prompts_from_opik()
 
     session_id = sys.argv[1] if len(sys.argv) > 1 else f"cli-{uuid.uuid4().hex[:8]}"
     print(f"Session: {session_id}  (Ctrl+D or 'quit' to exit)\n")

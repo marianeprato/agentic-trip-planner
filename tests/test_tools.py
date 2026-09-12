@@ -18,6 +18,7 @@ from agents.tool_context import ToolContext
 
 from app.context import TripContext
 from app.tools.budget import track_budget
+from app.tools.trip_details import update_trip_details
 from app.tools.currency import convert_currency
 from app.tools.poi import search_points_of_interest
 from app.tools.weather import get_weather_forecast
@@ -32,7 +33,10 @@ async def _invoke(tool, context, **kwargs) -> dict:
     ctx = ToolContext(context=context, tool_name=tool.name, tool_call_id="test-call", tool_arguments=args_json)
     raw = await tool.on_invoke_tool(ctx, args_json)
     if isinstance(raw, str):
-        return json.loads(raw)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
     if isinstance(raw, list):
         return [item.model_dump() for item in raw]
     return raw.model_dump()
@@ -63,6 +67,24 @@ async def test_track_budget_accumulates_spend_in_context():
     assert result2["spent"] == 1100.0
     assert result2["over_budget"] is True
     assert len(context.spend_log) == 2
+
+
+async def test_update_trip_details_only_overwrites_provided_fields():
+    context = TripContext(destination="Rome")
+    await _invoke(
+        update_trip_details,
+        context,
+        destination=None,
+        start_date="2027-06-01",
+        end_date="2027-06-03",
+        budget_amount=1000.0,
+        budget_currency="gbp",
+    )
+    assert context.destination == "Rome"  # untouched, was not passed
+    assert context.start_date.isoformat() == "2027-06-01"
+    assert context.end_date.isoformat() == "2027-06-03"
+    assert context.budget_amount == 1000.0
+    assert context.budget_currency == "GBP"
 
 
 async def test_convert_currency_same_currency_short_circuits():

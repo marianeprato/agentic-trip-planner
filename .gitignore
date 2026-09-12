@@ -22,3 +22,6 @@ web/out/
 # OS
 .DS_Store
 /CLAUDE.md
+
+# IDE
+.idea/

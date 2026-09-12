@@ -32,6 +32,12 @@ An agent's `output_type` fixes one schema for every final response it produces -
 
 Traces are sent to both the OpenAI platform's native tracing dashboard and a [Comet Opik](https://www.comet.com/site/products/opik/) project, side by side, via `add_trace_processor()` -- not `set_trace_processors()`, which would replace the default processor list and silently drop native tracing.
 
+### Prompt management
+
+Agent instructions are versioned in Opik's Prompt Library (included on the free Comet-hosted tier) rather than only living in code. `app/agents/prompts.py` holds the local default for each agent -- what it's constructed with, and what it falls back to if Opik is unreachable or a prompt hasn't been created there yet. `sync_prompts_from_opik()` is an explicit opt-in step (called once at startup by both `app/main.py` and `scripts/cli_demo.py`, never at import time) that overwrites each agent's instructions in memory with the latest version from Opik. This means editing a prompt in the Opik UI takes effect on the next app restart, no code change or redeploy needed -- while imports (and the test suite) stay network-free, since resolution never runs as an import-time side effect.
+
+Run `uv run python scripts/seed_prompts.py` once to push the local defaults into Opik so there's something to edit; re-running it is a no-op unless the local text has changed (Opik only creates a new version when content actually differs).
+
 ### Tools
 
 | Tool | Backing |

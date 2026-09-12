@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.agents import sync_prompts_from_opik
 from app.api.routes import router
 from app.config import require_openai_api_key
 from app.sessions import close_client
@@ -16,6 +17,7 @@ from app.tracing import configure_tracing
 async def lifespan(app: FastAPI):
     require_openai_api_key()
     configure_tracing()
+    sync_prompts_from_opik()
     yield
     await close_client()
 

@@ -25,7 +25,7 @@ class TripContext:
     start_date: date | None = None
     end_date: date | None = None
     budget_amount: float | None = None
-    budget_currency: str = "USD"
+    budget_currency: str = "GBP"
     running_spent: float = 0.0
     spend_log: list[BudgetLineItem] = field(default_factory=list)
     preferences: list[str] = field(default_factory=list)
@@ -52,7 +52,7 @@ class TripContext:
             start_date=date.fromisoformat(data["start_date"]) if data.get("start_date") else None,
             end_date=date.fromisoformat(data["end_date"]) if data.get("end_date") else None,
             budget_amount=data.get("budget_amount"),
-            budget_currency=data.get("budget_currency", "USD"),
+            budget_currency=data.get("budget_currency", "GBP"),
             running_spent=data.get("running_spent", 0.0),
             spend_log=[
                 BudgetLineItem(label=i["label"], amount=i["amount"], currency=i["currency"])
