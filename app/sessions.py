@@ -21,6 +21,11 @@ _client: AsyncMongoClient | None = None
 
 _CONTEXTS_COLLECTION = "trip_contexts"
 
+# Fixed session reused across Opik Agent Playground runs (see
+# scripts/playground_entrypoint.py) rather than a fresh one per call, so
+# multi-turn behavior (handoffs, guardrails) is actually reachable.
+PLAYGROUND_SESSION_ID = "opik-playground-test"
+
 
 def get_client() -> AsyncMongoClient:
     global _client
@@ -64,3 +69,11 @@ async def create_session(session_id: str) -> None:
         {"$setOnInsert": {"_id": session_id, **TripContext().to_dict()}},
         upsert=True,
     )
+
+
+async def clear_session(session_id: str) -> None:
+    """Wipe both the conversation history and TripContext for a session id."""
+    session = get_session(session_id)
+    await session.clear_session()
+    db = get_client()[MONGODB_DATABASE]
+    await db[_CONTEXTS_COLLECTION].delete_one({"_id": session_id})

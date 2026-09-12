@@ -15,7 +15,7 @@ import app.guardrails.input_guardrails as input_guardrails_module
 from app.context import TripContext
 from app.guardrails.input_guardrails import validate_trip_request
 from app.guardrails.output_guardrails import validate_budget_compliance
-from app.models import ItineraryDay, ItineraryOutput, PlannerResponse
+from app.models import ItineraryActivity, ItineraryDay, ItineraryOutput, PlannerResponse
 
 _TODAY = date.today()
 
@@ -78,7 +78,14 @@ def _sample_itinerary(total_cost: float) -> PlannerResponse:
             start_date="2027-01-01",
             end_date="2027-01-03",
             currency="USD",
-            days=[ItineraryDay(date="2027-01-01", summary="Arrival", activities=["Check in"], estimated_cost=total_cost)],
+            days=[
+                ItineraryDay(
+                    date="2027-01-01",
+                    summary="Arrival",
+                    activities=[ItineraryActivity(time="3:00 PM", description="Check in")],
+                    estimated_cost=total_cost,
+                )
+            ],
             total_estimated_cost=total_cost,
             budget_amount=1000.0,
         ),

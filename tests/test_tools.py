@@ -18,9 +18,11 @@ from agents.tool_context import ToolContext
 
 from app.context import TripContext
 from app.tools.budget import track_budget
-from app.tools.trip_details import update_trip_details
 from app.tools.currency import convert_currency
+from app.tools.facts import get_place_facts
 from app.tools.poi import search_points_of_interest
+from app.tools.restaurants import get_nearby_restaurants
+from app.tools.trip_details import update_trip_details
 from app.tools.weather import get_weather_forecast
 
 
@@ -87,6 +89,58 @@ async def test_update_trip_details_only_overwrites_provided_fields():
     assert context.budget_currency == "GBP"
 
 
+async def test_update_trip_details_records_returning_visitor_and_preferences():
+    context = TripContext()
+    await _invoke(
+        update_trip_details,
+        context,
+        is_returning_visitor=True,
+        preferences=["Kinkaku-ji", "a sushi omakase dinner"],
+    )
+    assert context.is_returning_visitor is True
+    assert context.preferences == ["Kinkaku-ji", "a sushi omakase dinner"]
+
+
+async def test_get_place_facts_resolves_via_search_then_fetches_summary(monkeypatch):
+    search_response = _make_response({"pages": [{"key": "Kinkaku-ji", "title": "Kinkaku-ji"}]})
+    summary_response = _make_response(
+        {
+            "title": "Kinkaku-ji",
+            "extract": "A Zen Buddhist temple in Kyoto covered in gold leaf.",
+            "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Kinkaku-ji"}},
+        }
+    )
+    with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=[search_response, summary_response])):
+        result = await _invoke(get_place_facts, TripContext(), place="Kinkaku-ji, Kyoto")
+    assert result["place"] == "Kinkaku-ji"
+    assert "gold leaf" in result["extract"]
+    assert result["source_url"] == "https://en.wikipedia.org/wiki/Kinkaku-ji"
+
+
+async def test_get_nearby_restaurants_returns_only_named_results():
+    geocode_response = _make_response([{"lat": "35.03", "lon": "135.73"}])  # Nominatim's shape: a plain list
+    overpass_response = _make_response(
+        {
+            "elements": [
+                {"tags": {"name": "Kinkaku Diner", "amenity": "restaurant", "cuisine": "japanese", "addr:street": "Kinkaku St", "addr:housenumber": "1"}},
+                {"tags": {"amenity": "restaurant"}},  # no name -- must be filtered out
+                {"tags": {"name": "Golden Cafe", "amenity": "cafe"}},
+            ]
+        }
+    )
+    with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=geocode_response)), patch(
+        "httpx.AsyncClient.post", new=AsyncMock(return_value=overpass_response)
+    ):
+        result = await _invoke(get_nearby_restaurants, TripContext(), place="Kinkaku-ji, Kyoto")
+
+    assert len(result) == 2
+    assert result[0]["name"] == "Kinkaku Diner"
+    assert result[0]["cuisine"] == "japanese"
+    assert result[0]["address"] == "1 Kinkaku St"
+    assert result[1]["name"] == "Golden Cafe"
+    assert result[1]["address"] is None
+
+
 async def test_convert_currency_same_currency_short_circuits():
     result = await _invoke(convert_currency, TripContext(), amount=100.0, from_currency="usd", to_currency="USD")
     assert result["converted_amount"] == 100.0
@@ -120,3 +174,36 @@ async def test_get_weather_forecast_geocodes_then_fetches_forecast():
     assert result["condition"] == "mainly clear"
     assert result["temperature_high_c"] == 25.0
     assert result["precipitation_chance_pct"] == 10
+    assert result["is_historical_estimate"] is False
+
+
+async def test_get_weather_forecast_falls_back_to_historical_estimate_beyond_horizon():
+    geocode_response = _make_response({"results": [{"latitude": 35.02, "longitude": 135.75}]})
+    forecast_error_response = _make_response({"reason": "date too far out"}, status_code=400)
+    archive_response = _make_response(
+        {
+            "daily": {
+                "time": ["2025-10-19", "2025-10-20", "2025-10-21", "2025-10-22", "2025-10-23"],
+                "weather_code": [1, 1, 2, 1, None],  # a day with missing station data
+                "temperature_2m_max": [22.0, 23.0, 21.0, 24.0, None],
+                "temperature_2m_min": [14.0, 15.0, 13.0, 16.0, None],
+                "precipitation_sum": [0.0, 4.2, 0.0, 0.0, None],
+            }
+        }
+    )
+
+    def raise_for_status_error():
+        raise httpx.HTTPStatusError("Bad Request", request=httpx.Request("GET", "https://x"), response=forecast_error_response)
+
+    forecast_error_response.raise_for_status = raise_for_status_error
+
+    with patch(
+        "httpx.AsyncClient.get",
+        new=AsyncMock(side_effect=[geocode_response, forecast_error_response, archive_response]),
+    ):
+        result = await _invoke(get_weather_forecast, TripContext(), destination="Kyoto", date="2026-10-22")
+
+    assert result["is_historical_estimate"] is True
+    assert result["temperature_high_c"] == 22.5  # None entry dropped before averaging
+    assert result["condition"] == "mainly clear"
+    assert result["precipitation_chance_pct"] == 25  # 1 of 4 usable reference days had rain

@@ -24,6 +24,8 @@ def update_trip_details(
     end_date: str | None = None,
     budget_amount: float | None = None,
     budget_currency: str | None = None,
+    is_returning_visitor: bool | None = None,
+    preferences: list[str] | None = None,
 ) -> str:
     """Record or update the trip's headline details as the user provides them.
 
@@ -36,6 +38,10 @@ def update_trip_details(
         end_date: ISO date string (YYYY-MM-DD).
         budget_amount: Total trip budget.
         budget_currency: ISO currency code, e.g. "GBP", "USD", "EUR".
+        is_returning_visitor: Whether the user has been to this destination before.
+        preferences: Full replacement list of specific things the user wants
+            to see/do this time (e.g. "Kinkaku-ji", "a sushi omakase dinner").
+            Pass the complete list every time, not just new additions.
     """
     context = wrapper.context
     if destination is not None:
@@ -48,4 +54,8 @@ def update_trip_details(
         context.budget_amount = budget_amount
     if budget_currency is not None:
         context.budget_currency = budget_currency.upper()
+    if is_returning_visitor is not None:
+        context.is_returning_visitor = is_returning_visitor
+    if preferences is not None:
+        context.preferences = preferences
     return "Trip details updated."
