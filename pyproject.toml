@@ -1,0 +1,29 @@
+[project]
+name = "agentic-trip-planner"
+version = "0.1.0"
+description = "Agentic trip itinerary planner built on the OpenAI Agents SDK (handoffs, guardrails, sessions)."
+requires-python = ">=3.11"
+dependencies = [
+    "openai-agents[mongodb]>=0.1.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.27.0",
+    "opik>=1.4.0",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

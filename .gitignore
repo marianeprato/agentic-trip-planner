@@ -1,0 +1,24 @@
+# Secrets
+.env
+.env.local
+web/.env.local
+
+# Claude Code
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node / Next.js (web/)
+web/node_modules/
+web/.next/
+web/out/
+
+# OS
+.DS_Store
+/CLAUDE.md
