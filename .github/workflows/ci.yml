@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # No OPENAI_API_KEY needed: guardrail/tool logic is tested directly,
+      # and handoff/guardrail-revision/max-turns behavior runs against the
+      # SDK's ScriptedModel test double -- see README's "Tests" section.
+      - name: Run tests
+        run: uv run pytest
