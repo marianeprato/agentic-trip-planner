@@ -27,11 +27,8 @@ class WeatherForecast(BaseModel):
 
 class PointOfInterest(BaseModel):
     name: str
-    category: str
     description: str
-    indoor: bool
-    estimated_cost: float
-    currency: str
+    source_url: str | None = None
 
 
 class CurrencyConversionResult(BaseModel):

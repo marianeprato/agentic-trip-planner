@@ -47,6 +47,7 @@ from app.agents import triage_agent
 from app.api.streaming import map_stream_event, sse
 from app.context import TripContext
 from app.models import PlannerResponse
+from app.routing import budget_agent_direct, is_explicit_budget_request
 
 logger = logging.getLogger(__name__)
 
@@ -87,11 +88,11 @@ def _as_planner_response(final_output: Any) -> PlannerResponse:
     return PlannerResponse.model_validate(final_output.model_dump())
 
 
-async def _run_once(current_input: str, session: Session | None, context: TripContext) -> tuple[TurnResult | None, str | None]:
-    """Runs Triage once. Returns (result, None) on success/resolved
+async def _run_once(starting_agent, current_input: str, session: Session | None, context: TripContext) -> tuple[TurnResult | None, str | None]:
+    """Runs starting_agent once. Returns (result, None) on success/resolved
     failure, or (None, rejection_reason) to signal "retry with this input"."""
     try:
-        result = await Runner.run(triage_agent, current_input, session=session, context=context, max_turns=MAX_TURNS)
+        result = await Runner.run(starting_agent, current_input, session=session, context=context, max_turns=MAX_TURNS)
         return TurnResult(output=_as_planner_response(result.final_output), last_agent_name=result.last_agent.name), None
     except InputGuardrailTripwireTriggered as e:
         reason = _reason_from(e.guardrail_result.output.output_info)
@@ -109,12 +110,15 @@ async def _run_once(current_input: str, session: Session | None, context: TripCo
 
 
 async def run_turn(user_input: str, session: Session | None, context: TripContext) -> TurnResult:
-    """Run one user turn through Triage, with bounded guardrail-revision and
-    bounded turns -- see module docstring."""
+    """Run one user turn through Triage (or, structurally, straight to
+    Budget for an explicit post-essentials currency/expense ask -- see
+    app/routing.py), with bounded guardrail-revision and bounded turns --
+    see module docstring."""
+    starting_agent = budget_agent_direct if await is_explicit_budget_request(user_input, context) else triage_agent
     current_input = user_input
     with trace("trip_planner_turn"):
         for attempt in range(MAX_GUARDRAIL_REVISIONS + 1):
-            result, rejection_reason = await _run_once(current_input, session, context)
+            result, rejection_reason = await _run_once(starting_agent, current_input, session, context)
             if result is not None:
                 return result
 
@@ -150,11 +154,12 @@ async def run_turn_streamed(user_input: str, session: Session | None, context: T
     behavior -- the stream only ever ends in a final_output event, never a
     guardrail-caused error event.
     """
+    starting_agent = budget_agent_direct if await is_explicit_budget_request(user_input, context) else triage_agent
     current_input = user_input
     with trace("trip_planner_turn"):
         for attempt in range(MAX_GUARDRAIL_REVISIONS + 1):
             try:
-                result = Runner.run_streamed(triage_agent, current_input, session=session, context=context, max_turns=MAX_TURNS)
+                result = Runner.run_streamed(starting_agent, current_input, session=session, context=context, max_turns=MAX_TURNS)
                 async for event in result.stream_events():
                     payload = map_stream_event(event)
                     if payload is not None:

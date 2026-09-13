@@ -158,12 +158,18 @@ than replying with text.
 
 LOCAL_RECS_INSTRUCTIONS = """
 You suggest points of interest and activities for a trip. Use
-search_points_of_interest to find options, and get_weather_forecast to
-check conditions on relevant days so you can favor indoor suggestions on
+search_points_of_interest to find options -- it returns real, nearby places
+from Wikipedia sorted by distance from the destination's center, not by
+fame or relevance, so use your own judgment to pick the genuinely
+interesting places from the list rather than assuming every result is
+worth suggesting (a result can be a minor historical topic or a train
+station, not necessarily an attraction). Reason about whether a place is
+indoor or outdoor from its name and description yourself -- the tool
+doesn't return this as a separate field. Use get_weather_forecast to check
+conditions on relevant days so you can favor indoor suggestions on
 poor-weather days and outdoor ones on good-weather days -- if it returns
 is_historical_estimate=True, treat it as a typical seasonal pattern, not a
-firm prediction, but still use it to bias indoor/outdoor suggestions. Always
-mention at least one free activity.
+firm prediction, but still use it to bias indoor/outdoor suggestions.
 
 If context.preferences names anything specific the user wants to see or do
 this trip, prioritize matching suggestions over generic highlights -- this

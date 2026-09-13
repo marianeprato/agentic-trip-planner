@@ -6,11 +6,14 @@ using ScriptedModel so no live API key is needed.
 from __future__ import annotations
 
 import json
+from datetime import date
+from unittest.mock import AsyncMock
 
 from agents import handoff
 from agents.testing import ScriptedModel, assistant_message, function_call
 
 import app.orchestration as orchestration_module
+from app.agents.budget_agent import budget_agent
 from app.agents.itinerary_composer_agent import itinerary_composer_agent
 from app.agents.triage_agent import triage_agent
 from app.context import TripContext
@@ -123,3 +126,44 @@ async def test_bounded_turns_falls_back_instead_of_looping_indefinitely(monkeypa
 
     assert result.output.status == "clarifying_question"
     assert "back-and-forth" in result.output.message.lower() or "simplify" in result.output.message.lower()
+
+
+async def test_explicit_budget_request_starts_from_budget_agent_not_triage(monkeypatch):
+    """Structural fix for the post-itinerary Budget Agent routing bug (see
+    app/routing.py): when is_explicit_budget_request is True, the turn
+    starts from budget_agent_direct -- a Budget Agent variant with no
+    handoff back to Triage -- rather than Triage's own unreliable routing
+    decision. No handoff back is deliberate: live testing showed that
+    letting Budget hand back to Triage as normal reintroduces the same
+    failure through a different door (Triage re-reads the same original
+    message and hands off to Budget again, sometimes bouncing repeatedly).
+    """
+    scripted_model = ScriptedModel()
+    test_triage = triage_agent.clone(model=scripted_model, handoffs=[], input_guardrails=[])
+    test_budget_direct = budget_agent.clone(model=scripted_model, handoffs=[])
+    monkeypatch.setattr(orchestration_module, "triage_agent", test_triage)
+    monkeypatch.setattr(orchestration_module, "budget_agent_direct", test_budget_direct)
+    monkeypatch.setattr(orchestration_module, "is_explicit_budget_request", AsyncMock(return_value=True))
+
+    final_payload = {"status": "clarifying_question", "message": "That's 175.50 EUR."}
+    scripted_model.extend(
+        [
+            # A single step, no handoff call at all -- if Triage's own
+            # (unmocked) routing judgment were used instead, this scripted
+            # step wouldn't match what the model is actually asked to do.
+            [assistant_message(json.dumps(final_payload))],
+        ]
+    )
+
+    context = TripContext(
+        destination="Paris",
+        start_date=date(2027, 1, 1),
+        end_date=date(2027, 1, 1),
+        budget_amount=150.0,
+        is_returning_visitor=False,
+    )
+    result = await run_turn("Can you convert 150 GBP to EUR?", session=None, context=context)
+
+    assert result.output.message == "That's 175.50 EUR."
+    assert result.last_agent_name == "Budget Agent"
+    assert scripted_model.remaining_steps == 0

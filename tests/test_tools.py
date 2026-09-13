@@ -43,17 +43,27 @@ async def _invoke(tool, context, **kwargs) -> dict:
     return raw.model_dump()
 
 
-async def test_search_points_of_interest_known_city_filters_by_category():
-    result = await _invoke(search_points_of_interest, TripContext(), destination="Paris", category="museum")
-    assert result
-    assert all(poi["category"] == "museum" for poi in result)
-    assert any(poi["name"] == "Louvre Museum" for poi in result)
+async def test_search_points_of_interest_returns_named_results_excluding_destination_page():
+    geocode_response = _make_response({"results": [{"latitude": 35.02, "longitude": 135.75}]})
+    geosearch_response = _make_response(
+        {
+            "query": {
+                "pages": [
+                    {"title": "Kyoto", "extract": "Kyoto is a city in Japan."},  # the destination itself -- excluded
+                    {"title": "Nijō Castle", "extract": "A flatland castle in Kyoto."},
+                    {"title": "Some Stub", "extract": ""},  # empty extract -- excluded
+                    {"title": "Kyoto Imperial Palace"},  # no extract at all -- excluded
+                ]
+            }
+        }
+    )
+    with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=[geocode_response, geosearch_response])):
+        result = await _invoke(search_points_of_interest, TripContext(), destination="Kyoto")
 
-
-async def test_search_points_of_interest_unknown_city_uses_generic_fallback():
-    result = await _invoke(search_points_of_interest, TripContext(), destination="Nowheresville")
-    assert len(result) == 4
-    assert all("Nowheresville" in poi["name"] for poi in result)
+    assert len(result) == 1
+    assert result[0]["name"] == "Nijō Castle"
+    assert result[0]["description"] == "A flatland castle in Kyoto."
+    assert result[0]["source_url"] == "https://en.wikipedia.org/wiki/Nij%C5%8D_Castle"
 
 
 async def test_track_budget_accumulates_spend_in_context():
