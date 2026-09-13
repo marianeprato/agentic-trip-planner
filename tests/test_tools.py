@@ -21,7 +21,6 @@ from app.tools.budget import track_budget
 from app.tools.currency import convert_currency
 from app.tools.facts import get_place_facts
 from app.tools.poi import search_points_of_interest
-from app.tools.restaurants import get_nearby_restaurants
 from app.tools.trip_details import update_trip_details
 from app.tools.weather import get_weather_forecast
 
@@ -44,17 +43,27 @@ async def _invoke(tool, context, **kwargs) -> dict:
     return raw.model_dump()
 
 
-async def test_search_points_of_interest_known_city_filters_by_category():
-    result = await _invoke(search_points_of_interest, TripContext(), destination="Paris", category="museum")
-    assert result
-    assert all(poi["category"] == "museum" for poi in result)
-    assert any(poi["name"] == "Louvre Museum" for poi in result)
+async def test_search_points_of_interest_returns_named_results_excluding_destination_page():
+    geocode_response = _make_response({"results": [{"latitude": 35.02, "longitude": 135.75}]})
+    geosearch_response = _make_response(
+        {
+            "query": {
+                "pages": [
+                    {"title": "Kyoto", "extract": "Kyoto is a city in Japan."},  # the destination itself -- excluded
+                    {"title": "Nijō Castle", "extract": "A flatland castle in Kyoto."},
+                    {"title": "Some Stub", "extract": ""},  # empty extract -- excluded
+                    {"title": "Kyoto Imperial Palace"},  # no extract at all -- excluded
+                ]
+            }
+        }
+    )
+    with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=[geocode_response, geosearch_response])):
+        result = await _invoke(search_points_of_interest, TripContext(), destination="Kyoto")
 
-
-async def test_search_points_of_interest_unknown_city_uses_generic_fallback():
-    result = await _invoke(search_points_of_interest, TripContext(), destination="Nowheresville")
-    assert len(result) == 4
-    assert all("Nowheresville" in poi["name"] for poi in result)
+    assert len(result) == 1
+    assert result[0]["name"] == "Nijō Castle"
+    assert result[0]["description"] == "A flatland castle in Kyoto."
+    assert result[0]["source_url"] == "https://en.wikipedia.org/wiki/Nij%C5%8D_Castle"
 
 
 async def test_track_budget_accumulates_spend_in_context():
@@ -130,63 +139,6 @@ async def test_get_place_facts_resolves_via_search_then_fetches_summary(monkeypa
     assert result["place"] == "Kinkaku-ji"
     assert "gold leaf" in result["extract"]
     assert result["source_url"] == "https://en.wikipedia.org/wiki/Kinkaku-ji"
-
-
-async def test_get_nearby_restaurants_returns_only_named_results():
-    geocode_response = _make_response([{"lat": "35.03", "lon": "135.73"}])  # Nominatim's shape: a plain list
-    overpass_response = _make_response(
-        {
-            "elements": [
-                {"tags": {"name": "Kinkaku Diner", "amenity": "restaurant", "cuisine": "japanese", "addr:street": "Kinkaku St", "addr:housenumber": "1"}},
-                {"tags": {"amenity": "restaurant"}},  # no name -- must be filtered out
-                {"tags": {"name": "Golden Cafe", "amenity": "cafe"}},
-            ]
-        }
-    )
-    with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=geocode_response)), patch(
-        "httpx.AsyncClient.post", new=AsyncMock(return_value=overpass_response)
-    ):
-        result = await _invoke(get_nearby_restaurants, TripContext(), place="Kinkaku-ji, Kyoto")
-
-    assert len(result) == 2
-    assert result[0]["name"] == "Kinkaku Diner"
-    assert result[0]["cuisine"] == "japanese"
-    assert result[0]["address"] == "1 Kinkaku St"
-    assert result[1]["name"] == "Golden Cafe"
-    assert result[1]["address"] is None
-
-
-async def test_get_nearby_restaurants_falls_back_to_mirror_after_primary_times_out():
-    geocode_response = _make_response([{"lat": "35.03", "lon": "135.73"}])
-    overpass_success = _make_response({"elements": [{"tags": {"name": "Mirror Diner", "amenity": "restaurant"}}]})
-    timeout_error = httpx.TimeoutException("timed out", request=httpx.Request("POST", "https://x"))
-
-    with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=geocode_response)), patch(
-        "httpx.AsyncClient.post",
-        new=AsyncMock(side_effect=[timeout_error, timeout_error, overpass_success]),
-    ), patch("app.tools.restaurants.asyncio.sleep", new=AsyncMock()):
-        result = await _invoke(get_nearby_restaurants, TripContext(), place="Kinkaku-ji, Kyoto")
-
-    assert len(result) == 1
-    assert result[0]["name"] == "Mirror Diner"
-
-
-async def test_get_nearby_restaurants_degrades_gracefully_when_all_mirrors_fail():
-    geocode_response = _make_response([{"lat": "35.03", "lon": "135.73"}])
-    timeout_error = httpx.TimeoutException("timed out", request=httpx.Request("POST", "https://x"))
-    # 3 mirrors x 2 retries each = 6 total failures before giving up.
-    all_failures = [timeout_error] * 6
-
-    with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=geocode_response)), patch(
-        "httpx.AsyncClient.post", new=AsyncMock(side_effect=all_failures)
-    ), patch("app.tools.restaurants.asyncio.sleep", new=AsyncMock()):
-        result = await _invoke(get_nearby_restaurants, TripContext(), place="Kinkaku-ji, Kyoto")
-
-    # The tool raised; the SDK's default tool-error handling turns that into
-    # a graceful text error for the agent (the same mechanism relied on
-    # everywhere else a tool can fail), not an unhandled exception.
-    assert isinstance(result, str)
-    assert "error occurred" in result.lower()
 
 
 async def test_convert_currency_same_currency_short_circuits():

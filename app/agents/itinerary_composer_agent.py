@@ -22,7 +22,6 @@ from app.context import TripContext
 from app.guardrails.output_guardrails import validate_budget_compliance
 from app.models import PlannerResponse
 from app.tools.facts import get_place_facts
-from app.tools.restaurants import get_nearby_restaurants
 from app.tools.weather import get_weather_forecast
 
 itinerary_composer_agent = Agent[TripContext](
@@ -31,11 +30,11 @@ itinerary_composer_agent = Agent[TripContext](
         "The default next step once destination, dates, budget, and return-visitor status are "
         "all known and the current message isn't an explicit ask for currency/expense help or "
         "local suggestions. Writes the full day-by-day itinerary itself -- finds its own points "
-        "of interest, weather, restaurants, and facts, so nothing needs to run before it."
+        "of interest, weather, and facts, so nothing needs to run before it."
     ),
     instructions=ITINERARY_COMPOSER_INSTRUCTIONS,
     model=OPENAI_MODEL,
-    tools=[get_weather_forecast, get_place_facts, get_nearby_restaurants],
+    tools=[get_weather_forecast, get_place_facts],
     handoffs=[handoff(triage_agent)],
     output_type=PlannerResponse,
     output_guardrails=[validate_budget_compliance],
