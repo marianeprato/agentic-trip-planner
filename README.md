@@ -64,7 +64,6 @@ Run `uv run python scripts/seed_prompts.py` once to push the local defaults into
 | `update_trip_details` | Local logic against `TripContext`, no external call | Triage |
 | `get_weather_forecast` | Open-Meteo (free, keyless), with a historical-estimate fallback | Composer, Local Recs |
 | `get_place_facts` | Wikipedia search + summary REST APIs (free, keyless) | Composer, Local Recs |
-| `get_nearby_restaurants` | OpenStreetMap Overpass API (free, keyless), geocoded via Nominatim | Composer, Local Recs |
 | `search_points_of_interest` | Small in-repo mocked dataset | Local Recs |
 | `convert_currency` | Frankfurter API (free, keyless) | Budget |
 | `track_budget` | Local logic against `TripContext`, no external call | Budget |
@@ -73,8 +72,9 @@ All the free/keyless external APIs were a deliberate choice -- API key managemen
 
 - **Open-Meteo's forecast horizon** (~16 days) is shorter than the guardrail's allowed trip-planning window (up to ~2 years out). Rather than erroring, `get_weather_forecast` falls back to a seasonal estimate built from the same calendar week in last year's historical archive (`WeatherForecast.is_historical_estimate=True`), so a far-out trip still gets genuine "what to pack" advice, phrased as typical conditions rather than a firm forecast. The historical archive endpoint also has no "probability of precipitation" field (that's a forecast-only concept) -- Open-Meteo silently returns `null` for it rather than erroring, so the historical path uses `precipitation_sum` instead, converted to a chance-of-rain proxy (the fraction of reference days that saw measurable rain).
 - **Wikipedia's summary endpoint** needs an exact page title -- a query like "Kinkaku-ji, Kyoto" (the natural form for a geocoding-based tool) 404s against it directly. `get_place_facts` resolves the title via Wikipedia's own search API first, then fetches the summary for the resolved page.
-- **The Overpass API's free public instances have no SLA** and do occasionally time out or 5xx under load (confirmed live). `get_nearby_restaurants` retries each of three independent public mirrors with backoff before moving to the next, and only surfaces the tool-error (which the agent is instructed to handle gracefully -- naming no restaurant rather than inventing one) once every mirror has failed.
-- Both Wikipedia's and Nominatim/Overpass's public APIs reject requests with a generic/default `User-Agent` header -- each tool sends a descriptive one per those APIs' usage policies.
+- Wikipedia's public API rejects requests with a generic/default `User-Agent` header -- `get_place_facts` sends a descriptive one per its usage policy.
+
+**Restaurant recommendations were deliberately removed from scope.** An earlier version named specific restaurants via OpenStreetMap's Overpass API, geocoded through Nominatim. Live testing surfaced two compounding problems: Overpass's free public mirrors have no SLA and can fail entirely under load (confirmed live -- all three independent mirrors down at once), and when that happened the model did not reliably fall back to an honest "no confirmed restaurant" response -- it named specific, plausible-sounding restaurants from its own training-data memory on most days of a week-long itinerary, despite an explicit instruction not to. That's a correctness problem a prompt instruction alone couldn't hold under real infrastructure failure, and it scales with itinerary length (more meals, more chances to fail). Rather than paper over it with retries or a narrower fallback prompt, restaurant suggestions were removed from the product entirely -- the assistant plans activities, not where to eat.
 
 ## Running locally
 

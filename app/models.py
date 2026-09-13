@@ -34,12 +34,6 @@ class PointOfInterest(BaseModel):
     currency: str
 
 
-class NearbyRestaurant(BaseModel):
-    name: str
-    cuisine: str | None = None
-    address: str | None = None
-
-
 class CurrencyConversionResult(BaseModel):
     amount: float
     from_currency: str

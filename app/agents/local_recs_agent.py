@@ -3,8 +3,8 @@ about indoor/outdoor suggestions. Hands back to Triage when done.
 
 output_type=SpokeFallbackResponse is defense-in-depth, not the normal
 path. Confirmed live: this agent can call several tools across turns (POI
-search, weather, facts, restaurants) and then reply directly instead of
-calling the handoff-back tool -- reset_tool_choice (SDK default True)
+search, weather, facts) and then reply directly instead of calling the
+handoff-back tool -- reset_tool_choice (SDK default True)
 reverts tool_choice to "auto" after any tool call, so
 tool_choice="required" only guarantees the *first* turn isn't a bare
 reply, not every turn.
@@ -30,7 +30,6 @@ from app.context import TripContext
 from app.models import SpokeFallbackResponse
 from app.tools.facts import get_place_facts
 from app.tools.poi import search_points_of_interest
-from app.tools.restaurants import get_nearby_restaurants
 from app.tools.weather import get_weather_forecast
 
 local_recs_agent = Agent[TripContext](
@@ -38,13 +37,13 @@ local_recs_agent = Agent[TripContext](
     handoff_description=(
         "ONLY use when the user's current message explicitly asks for local activity/place "
         "suggestions or recommendations. Not a default step before building an itinerary -- "
-        "the Itinerary Composer Agent already finds its own points of interest, restaurants, "
-        "and facts and does not need this run first."
+        "the Itinerary Composer Agent already finds its own points of interest and facts and "
+        "does not need this run first."
     ),
     instructions=LOCAL_RECS_INSTRUCTIONS,
     model=OPENAI_MODEL,
     model_settings=ModelSettings(tool_choice="required"),
-    tools=[search_points_of_interest, get_weather_forecast, get_place_facts, get_nearby_restaurants],
+    tools=[search_points_of_interest, get_weather_forecast, get_place_facts],
     handoffs=[handoff(triage_agent)],
     output_type=SpokeFallbackResponse,
 )
