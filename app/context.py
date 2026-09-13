@@ -31,6 +31,24 @@ class TripContext:
     preferences: list[str] = field(default_factory=list)
     is_returning_visitor: bool | None = None
 
+    def has_all_essentials(self) -> bool:
+        """Whether Triage has gathered everything it must ask for before
+        routing to any specialist -- destination, both dates, a budget, and
+        an answer to the return-visitor question. Used to gate the
+        handoffs themselves (see app/agents/__init__.py's is_enabled=), not
+        just as a prompt instruction: a cheap routing model has been
+        observed live routing to a specialist (Budget, then separately
+        Local Recs) on turn one, before ever asking the return-visitor
+        question -- wording alone wasn't reliable enough to prevent it.
+        """
+        return (
+            self.destination is not None
+            and self.start_date is not None
+            and self.end_date is not None
+            and self.budget_amount is not None
+            and self.is_returning_visitor is not None
+        )
+
     def to_dict(self) -> dict:
         return {
             "destination": self.destination,
