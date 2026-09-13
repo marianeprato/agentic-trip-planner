@@ -11,11 +11,9 @@ import asyncio
 import sys
 import uuid
 
-from agents import InputGuardrailTripwireTriggered, OutputGuardrailTripwireTriggered, Runner
-
-from app.agents import sync_prompts_from_opik, triage_agent
+from app.agents import sync_prompts_from_opik
 from app.config import require_openai_api_key
-from app.models import PlannerResponse
+from app.orchestration import run_turn
 from app.sessions import close_client, create_session, get_context, get_session, save_context
 from app.tracing import configure_tracing
 
@@ -41,20 +39,11 @@ async def main() -> None:
                 break
 
             context = await get_context(session_id)
-
-            try:
-                result = await Runner.run(triage_agent, user_input, session=session, context=context)
-            except InputGuardrailTripwireTriggered as e:
-                print(f"[input guardrail tripped] {e.guardrail_result.output.output_info}\n")
-                continue
-            except OutputGuardrailTripwireTriggered as e:
-                print(f"[output guardrail tripped] {e.guardrail_result.output.output_info}\n")
-                continue
-
+            result = await run_turn(user_input, session, context)
             await save_context(session_id, context)
 
-            output: PlannerResponse = result.final_output
-            print(f"[agent: {result.last_agent.name}]")
+            output = result.output
+            print(f"[agent: {result.last_agent_name}]")
             if output.status == "clarifying_question":
                 print(f"assistant> {output.message}\n")
             else:

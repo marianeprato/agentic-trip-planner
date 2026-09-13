@@ -58,6 +58,34 @@ async def test_input_guardrail_allows_sensible_dates_and_valid_destination(monke
     assert result.tripwire_triggered is False
 
 
+def test_all_user_text_includes_earlier_turns_not_just_the_latest():
+    """Confirmed live: a follow-up turn with no destination in it ("No,
+    first time.") was rejected as having "no destination to validate",
+    because the destination check was scoped to only the latest message
+    (correct for the date check, wrong for this one -- a destination is
+    typically stated once, not repeated every turn). _all_user_text is
+    what the LLM destination check now runs on instead of the latest-only
+    helper; this locks in that it actually reaches back into history.
+    """
+    conversation_so_far = [
+        {"content": "Plan a day trip to Kyoto on 2026-09-25, budget 100 GBP.", "role": "user"},
+        {
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message",
+            "content": [{"type": "output_text", "text": '{"status":"clarifying_question","message":"Have you been to Kyoto before?","itinerary":null}'}],
+        },
+        {"content": "No, first time.", "role": "user"},
+    ]
+
+    combined = input_guardrails_module._all_user_text(conversation_so_far)
+
+    assert "Kyoto" in combined
+    assert "No, first time." in combined
+    assert "msg_1" not in combined  # never pulls in assistant-side ids/JSON
+
+
 async def test_input_guardrail_llm_check_flags_nonsense_destination(monkeypatch):
     scripted_model = ScriptedModel(
         [[assistant_message(json.dumps({"is_valid": False, "reasoning": "Narnia is fictional."}))]]

@@ -6,16 +6,35 @@ A trip itinerary planner built on the [OpenAI Agents SDK](https://openai.github.
 
 ### Multi-agent handoffs (star topology)
 
-A **Triage Agent** is the sole entry point for every conversation turn and the only agent that ever produces a final response to the user. When a turn needs currency conversion or budget tracking, Triage hands off to a **Budget Agent**; when it needs local activity suggestions, it hands off to a **Local Recommendations Agent**. Both specialist agents hand control back to Triage rather than replying directly -- a strict star topology (hub-and-spoke, not a mesh) that keeps the handoff graph easy to reason about while still exercising genuine bidirectional handoffs.
+A **Triage Agent** is the sole entry point for every conversation turn and the only agent the user ever talks to directly for clarifying questions. It never writes the itinerary itself -- once it has destination, dates, budget, and preferences, it hands off to an **Itinerary Composer Agent**, which does the actual writing. It also hands off to a **Budget Agent** for currency conversion/expense tracking, or a **Local Recommendations Agent** for activity suggestions. All three specialists hand control back to Triage rather than replying directly -- a strict star topology (hub-and-spoke, not a mesh) that keeps the handoff graph easy to reason about while still exercising genuine bidirectional handoffs.
 
-Every `Runner.run()` call always starts at Triage, even mid-conversation. The alternative -- resuming a turn from whichever agent last had control -- would mean Triage's input/output guardrails (see below) simply don't run on turns a specialist agent handles directly, since input guardrails only run for the agent a run *starts* with. Always entering through Triage keeps guardrail coverage total and unconditional.
+Every `Runner.run()` call always starts at Triage, even mid-conversation. The alternative -- resuming a turn from whichever agent last had control -- would mean Triage's input guardrail (see below) simply doesn't run on turns a specialist agent handles directly, since input guardrails only run for the agent a run *starts* with. Always entering through Triage keeps guardrail coverage total and unconditional.
 
-### Guardrails
+**Handoffs are gated on real state, not just prompted.** All three of Triage's handoffs (`Budget`, `Local Recs`, `Composer`) use `is_enabled=` bound to `TripContext.has_all_essentials()` (destination, both dates, budget, and an answer to the return-visitor question). While that's `False`, the handoff tools aren't even present in the routing model's tool list -- it's not just told not to hand off early, it structurally *can't*. This exists because it was observed live: the cheap routing model would sometimes route to a specialist on turn one, before ever asking the return-visitor question, no matter how the prompt worded the ordering.
+
+**Defense-in-depth against a specialist skipping its handoff back:** Budget and Local Recs are instructed, and given `tool_choice="required"`, to never reply directly -- but `tool_choice="required"` only forces the *first* turn to be a tool call (the SDK resets it to `"auto"` after any tool call, specifically to avoid an infinite forced-tool loop), so a later turn can still slip through as a bare reply. This happened live twice, in two different ways: first as a raw string that crashed any caller expecting structured output, then -- after giving them `output_type=PlannerResponse` to fix that -- as a complete, itinerary-shaped reply that skipped Composer's writing rules and the budget guardrail entirely (neither agent carries it). Budget and Local Recs now use a deliberately narrower type, `SpokeFallbackResponse` (`status` fixed to `"clarifying_question"`, no `itinerary` field at all) -- schema enforcement makes a stray reply incapable of representing an itinerary, no matter what the model intended. `app/orchestration.py` normalizes it back into the wider `PlannerResponse` shape before it reaches a caller.
+
+**Triage itself needed the same `tool_choice="required"` treatment**, for a related but distinct failure: with only one tool (`update_trip_details`) available before the essentials are gathered, the cheap routing model would sometimes get stuck calling it repeatedly with unchanged values instead of ever asking the next question -- and, separately, sometimes skip calling it at all and jump straight to asking about the one missing field, silently never recording what the user had just given it in the same message. Forcing the first turn to be a tool call fixes the second failure directly. The first failure needed a different fix: `update_trip_details`'s "nothing changed" response now names the *specific* still-missing field and states the exact required next action (e.g. *"You are still missing: whether the user has been to this destination before. Do not call this tool again -- respond now with..."*), rather than a generic "move on" -- generic feedback alone didn't reliably break the repetition, but naming the exact gap did.
+
+### Cost-aware model routing
+
+Triage's job -- deciding what to ask next, which specialist to hand off to -- is classification-shaped, not generation. It runs on a cheaper/faster model (`OPENAI_ROUTING_MODEL`, default `gpt-4o-mini`), as does the input guardrail's destination-plausibility check (same shape: a yes/no judgment, not writing). The Itinerary Composer Agent -- the step people actually judge the product by -- runs on the stronger model (`OPENAI_MODEL`, default `gpt-4.1-mini`). Budget and Local Recs stay on the stronger model too: their job is real tool orchestration (currency math, weighing weather against POI options), not pure routing.
+
+This is a deliberate tradeoff, not a limitation: routing/classification quality is far less sensitive to model strength than a written itinerary is, so paying for the stronger model only where it matters keeps the system both cheaper and, if anything, more consistent (a weaker model asked to also *write* well is a worse bargain than a strong model reserved for exactly that).
+
+### Guardrails, with bounded revision instead of a hard rejection
 
 Two different guardrail *styles*, deliberately contrasted:
 
-- **Input guardrail** (`validate_trip_request`): cheap deterministic date checks (parses, ordered correctly, not in the past, not absurdly far out) run first with no model call; only if those pass does a small dedicated LLM agent check whether the destination is a real, plannable place at all (catching "Narnia"-style nonsense that no regex would catch). Registered to run *before* the main agent starts, not in parallel with it, since a rejected request should never spend tokens generating a response first.
-- **Output guardrail** (`validate_budget_compliance`): pure arithmetic, no model call. Sums the produced itinerary's estimated costs and compares against the trip's stated budget with a small tolerance, independently of whatever the agent itself estimated.
+- **Input guardrail** (`validate_trip_request`): cheap deterministic date checks (parses, ordered correctly, not in the past, not absurdly far out) run first with no model call, against *only the latest user message* -- once a session has history, the guardrail's input is the *entire* conversation, and an earlier version of this scanned all of it for dates, which was flaky (it could misfire on internal message IDs from prior turns). Only if the date checks pass does a small dedicated LLM agent check whether the destination is a real, plannable place at all (catching "Narnia"-style nonsense that no regex would catch). Registered to run *before* the main agent starts, not in parallel with it, since a rejected request should never spend tokens generating a response first.
+- **Output guardrail** (`validate_budget_compliance`): pure arithmetic, no model call. Sums the produced itinerary's estimated costs and compares against the trip's stated budget with a small tolerance, independently of whatever the agent itself estimated. Lives on the Itinerary Composer Agent (it moved there when Composer split off from Triage), not Triage.
+
+Neither guardrail failure is a hard error to the caller (`app/orchestration.py`):
+
+- An **input** rejection becomes a normal `clarifying_question` response explaining why, rather than an HTTP error -- there's nothing to automatically fix, so the ball goes back to the user.
+- An **output** rejection (itinerary over budget) feeds the rejection reason back to the model and gives it up to `MAX_GUARDRAIL_REVISIONS` (2) revision attempts before falling back to a clear "couldn't fit the budget" message. Every attempt for one user turn is wrapped in a single `trace()` so they show up grouped together in the OpenAI/Opik dashboards instead of as unrelated top-level traces, and both the per-attempt revision and hitting the limit are recorded via `custom_span()` -- specifically so they're visible in the trace tree itself, not just in application logs.
+
+A `max_turns` bound (15) on the underlying `Runner.run()` calls also caps how many turns (model calls, including handoffs) one call can take, so a pathological Triage↔specialist back-and-forth can't loop indefinitely -- it falls back to a clear "this needed more back-and-forth than expected" message instead of hanging or erroring, also logged via `custom_span()`.
 
 ### Sessions and context: two persistence layers, one datastore
 
@@ -26,7 +45,7 @@ Conversation history (what the model sees each turn) and trip state (destination
 
 ### Structured output across conversational and final turns
 
-An agent's `output_type` fixes one schema for every final response it produces -- it can't return plain text on one turn and a structured itinerary on the next. Triage's output is therefore a single discriminated type, `PlannerResponse`, with a `status` of either `clarifying_question` (asking the user for missing information) or `itinerary` (the completed, structured plan). The output guardrail only checks budget compliance when `status == "itinerary"`.
+An agent's `output_type` fixes one schema for every final response it produces -- it can't return plain text on one turn and a structured itinerary on the next. Triage and Composer -- the only two agents allowed to produce a reply the user actually sees -- share a discriminated type, `PlannerResponse`, with a `status` of either `clarifying_question` or `itinerary`. Budget and Local Recs deliberately use a narrower type instead, `SpokeFallbackResponse` (see above), that can only ever represent a clarifying question: they should never be the one producing the user-facing reply at all, so their fallback type shouldn't be *capable* of a full itinerary either. The output guardrail only checks budget compliance when `status == "itinerary"`, which only `PlannerResponse` can express.
 
 ### Tracing
 
@@ -40,14 +59,22 @@ Run `uv run python scripts/seed_prompts.py` once to push the local defaults into
 
 ### Tools
 
-| Tool | Backing |
-|---|---|
-| `get_weather_forecast` | Open-Meteo (free, keyless) |
-| `search_points_of_interest` | Small in-repo mocked dataset |
-| `convert_currency` | Frankfurter API (free, keyless) |
-| `track_budget` | Local logic against `TripContext`, no external call |
+| Tool | Backing | Used by |
+|---|---|---|
+| `update_trip_details` | Local logic against `TripContext`, no external call | Triage |
+| `get_weather_forecast` | Open-Meteo (free, keyless), with a historical-estimate fallback | Composer, Local Recs |
+| `get_place_facts` | Wikipedia search + summary REST APIs (free, keyless) | Composer, Local Recs |
+| `get_nearby_restaurants` | OpenStreetMap Overpass API (free, keyless), geocoded via Nominatim | Composer, Local Recs |
+| `search_points_of_interest` | Small in-repo mocked dataset | Local Recs |
+| `convert_currency` | Frankfurter API (free, keyless) | Budget |
+| `track_budget` | Local logic against `TripContext`, no external call | Budget |
 
-`get_weather_forecast` and `search_points_of_interest` were kept keyless and free by design -- API key management and free-tier rate limits are orthogonal to what this project is testing. Open-Meteo's forecast horizon (~16 days) is shorter than the guardrail's allowed trip-planning window (up to ~2 years out); a request for weather too far in advance surfaces as a tool-call error the agent sees and can route around in its response, rather than a crash.
+All the free/keyless external APIs were a deliberate choice -- API key management and paid-tier friction are orthogonal to what this project is testing -- but each comes with a real-world rough edge worth knowing about, all handled explicitly rather than papered over:
+
+- **Open-Meteo's forecast horizon** (~16 days) is shorter than the guardrail's allowed trip-planning window (up to ~2 years out). Rather than erroring, `get_weather_forecast` falls back to a seasonal estimate built from the same calendar week in last year's historical archive (`WeatherForecast.is_historical_estimate=True`), so a far-out trip still gets genuine "what to pack" advice, phrased as typical conditions rather than a firm forecast. The historical archive endpoint also has no "probability of precipitation" field (that's a forecast-only concept) -- Open-Meteo silently returns `null` for it rather than erroring, so the historical path uses `precipitation_sum` instead, converted to a chance-of-rain proxy (the fraction of reference days that saw measurable rain).
+- **Wikipedia's summary endpoint** needs an exact page title -- a query like "Kinkaku-ji, Kyoto" (the natural form for a geocoding-based tool) 404s against it directly. `get_place_facts` resolves the title via Wikipedia's own search API first, then fetches the summary for the resolved page.
+- **The Overpass API's free public instances have no SLA** and do occasionally time out or 5xx under load (confirmed live). `get_nearby_restaurants` retries each of three independent public mirrors with backoff before moving to the next, and only surfaces the tool-error (which the agent is instructed to handle gracefully -- naming no restaurant rather than inventing one) once every mirror has failed.
+- Both Wikipedia's and Nominatim/Overpass's public APIs reject requests with a generic/default `User-Agent` header -- each tool sends a descriptive one per those APIs' usage policies.
 
 ## Running locally
 
@@ -68,8 +95,38 @@ uv run uvicorn app.main:app --reload
 
 - `POST /trips/sessions` -- start a session
 - `POST /trips/sessions/{session_id}/messages` -- send a message, get back a `PlannerResponse`
-- `POST /trips/sessions/{session_id}/messages/stream` -- same, streamed over SSE (drives the web UI's live agent-activity view)
+- `POST /trips/sessions/{session_id}/messages/stream` -- same, streamed over SSE (drives the web UI's live agent-activity view); a guardrail revision surfaces as a `{"type": "revising"}` event between attempts, matching the non-streaming endpoint's behavior of never treating a guardrail rejection as a hard error
 - `GET /trips/sessions/{session_id}` -- inspect current trip state
+
+### Opik Agent Playground
+
+`scripts/playground_entrypoint.py` wires the trip planner up to [Opik's Agent Playground](https://www.comet.com/docs/opik/development/agent-playground) for interactive testing and prompt iteration from the browser:
+
+```bash
+uv run opik endpoint --project agentic-trip-planner -- uv run python scripts/playground_entrypoint.py
+```
+
+It reuses one fixed session (`opik-playground-test`) across Playground runs rather than a fresh one per call -- this project's interesting behavior (handoffs, guardrails, revision) only shows up after a few turns once destination/dates/budget are known, so a fresh session every time would almost always just dead-end on the same clarifying question. Run `scripts/reset_playground_session.py` to deliberately start over instead of continuing the last conversation.
+
+**Stop it before relaunching.** The entrypoint blocks forever by design (see its own comments) so `opik endpoint` can keep dispatching runs to it -- there's no automatic exit. Relaunching without stopping the previous instance first leaves it running as an orphaned process forever, and having multiple registered runners for the same project can make the Playground route to an unpredictable one of them. Stop cleanly with:
+
+```bash
+uv run opik endpoint stop --project agentic-trip-planner
+# or, to clear every runner regardless of project:
+uv run opik endpoint stop --all
+```
+
+(Learned the hard way during development -- dozens of these accumulated silently over a single session before this was caught.)
+
+### Running the API in Docker
+
+An optional, standalone path for running the API itself in a container (the `uv run uvicorn --reload` command above stays the primary local dev loop):
+
+```bash
+docker build -t agentic-trip-planner .
+docker compose up -d   # MongoDB on localhost:27017
+docker run --rm -p 8000:8000 --env-file .env -e MONGODB_URI=mongodb://host.docker.internal:27017 agentic-trip-planner
+```
 
 ## Tests
 
@@ -77,7 +134,7 @@ uv run uvicorn app.main:app --reload
 uv run pytest
 ```
 
-Guardrails and tool logic are tested directly (no model calls). Handoff routing is tested against the SDK's `ScriptedModel` test double, so the suite runs without a live API key.
+Guardrails and tool logic are tested directly (no model calls). Handoff routing, the guardrail-revision loop, and the bounded-turns fallback are tested against the SDK's `ScriptedModel` test double, so the full suite runs without a live API key -- this is also what CI (`.github/workflows/ci.yml`) runs on every push and pull request.
 
 ## Frontend
 

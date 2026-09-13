@@ -97,7 +97,8 @@ class ItineraryOutput(BaseModel):
 
 
 class PlannerResponse(BaseModel):
-    """Triage agent's output_type.
+    """Triage and Composer's output_type -- the two agents allowed to
+    produce a final reply the user actually sees.
 
     A single agent's output_type must be one fixed schema for every final
     response, so a plain "ask a clarifying question" turn and a "here's the
@@ -112,3 +113,26 @@ class PlannerResponse(BaseModel):
     itinerary: ItineraryOutput | None = Field(
         default=None, description="Set when status is 'itinerary'."
     )
+
+
+class SpokeFallbackResponse(BaseModel):
+    """Budget and Local Recs' output_type -- deliberately narrower than
+    PlannerResponse.
+
+    Both agents are instructed to always hand back to Triage rather than
+    reply directly, with output_type as defense-in-depth for the case
+    where they don't (see their modules' docstrings). That defense-in-depth
+    used to just be PlannerResponse, on the assumption a stray reply would
+    come out as a harmless clarifying question -- but live testing showed
+    the model can and does fill in a *complete, itinerary-shaped* reply
+    instead, which is worse than the crash it was meant to prevent: that
+    itinerary never goes through Composer's quality rules, and neither
+    Budget nor Local Recs carries the budget output guardrail, so it would
+    reach the user completely unchecked. Structured-output schema
+    enforcement makes status="itinerary" impossible to represent here, so
+    a stray reply can only ever come out as a clarifying question, no
+    matter what the model intended.
+    """
+
+    status: Literal["clarifying_question"] = "clarifying_question"
+    message: str

@@ -14,6 +14,7 @@ import opik
 
 from app.agents.prompts import (
     BUDGET_INSTRUCTIONS,
+    ITINERARY_COMPOSER_INSTRUCTIONS,
     LOCAL_RECS_INSTRUCTIONS,
     OPIK_PROMPT_NAMES,
     TRIAGE_INSTRUCTIONS,
@@ -22,6 +23,7 @@ from app.config import require_openai_api_key  # noqa: F401  (ensures .env is lo
 
 _PROMPTS = {
     OPIK_PROMPT_NAMES["triage"]: TRIAGE_INSTRUCTIONS,
+    OPIK_PROMPT_NAMES["itinerary_composer"]: ITINERARY_COMPOSER_INSTRUCTIONS,
     OPIK_PROMPT_NAMES["budget"]: BUDGET_INSTRUCTIONS,
     OPIK_PROMPT_NAMES["local_recs"]: LOCAL_RECS_INSTRUCTIONS,
 }
