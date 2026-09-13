@@ -5,8 +5,10 @@ consumes over SSE.
 Guardrails still run the same way under run_streamed() -- a tripwire still
 raises, just partway through consuming the stream. Since the 200 +
 text/event-stream headers are already flushed by then, a guardrail trip
-can't be a clean HTTP error status; it's mapped to a terminal {"type":
-"error", ...} SSE event instead (see app/api/routes.py).
+can't be a clean HTTP error status; app/orchestration.py's
+run_turn_streamed() catches it and yields a terminal {"type":
+"final_output", ...} frame instead, same as any other resolved turn -- the
+stream never ends in an "error" event.
 """
 
 from __future__ import annotations

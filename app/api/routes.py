@@ -1,28 +1,29 @@
 """HTTP routes wrapping the agent system.
 
-Every Runner call here always starts at triage_agent (never resumed from
-result.last_agent) so that Triage's input/output guardrails run on every
-turn, regardless of which agent handled the previous turn -- see the plan's
-build-order flag #2 for why this matters.
+Turn execution (guardrail-revision, bounded turns) lives in
+app/orchestration.py, shared with the CLI demo and Playground entrypoint.
+As of that module, guardrail rejections no longer raise out to here as
+InputGuardrailTripwireTriggered/OutputGuardrailTripwireTriggered -- they
+resolve to a clarifying-style PlannerResponse instead, so there is no
+guardrail-specific 422 mapping here anymore; a rejected request is a normal
+200 response explaining why, not a hard error.
 """
 
 from __future__ import annotations
 
 import uuid
 
-from agents import InputGuardrailTripwireTriggered, OutputGuardrailTripwireTriggered, Runner
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from app.agents import triage_agent
 from app.api.schemas import (
     CreateSessionResponse,
     SendMessageRequest,
     SendMessageResponse,
     SessionStateResponse,
 )
-from app.api.streaming import map_stream_event, sse
 from app.models import PlannerResponse
+from app.orchestration import run_turn, run_turn_streamed
 from app.sessions import create_session, get_context, get_session, save_context
 
 router = APIRouter(prefix="/trips")
@@ -54,21 +55,10 @@ async def send_message(session_id: str, body: SendMessageRequest) -> PlannerResp
     context = await get_context(session_id)
     session = get_session(session_id)
 
-    try:
-        result = await Runner.run(triage_agent, body.message, session=session, context=context)
-    except InputGuardrailTripwireTriggered as e:
-        raise HTTPException(
-            status_code=422,
-            detail={"detail": "Input rejected.", "guardrail": "input", "reasoning": e.guardrail_result.output.output_info},
-        ) from e
-    except OutputGuardrailTripwireTriggered as e:
-        raise HTTPException(
-            status_code=422,
-            detail={"detail": "Generated itinerary rejected.", "guardrail": "output", "reasoning": e.guardrail_result.output.output_info},
-        ) from e
+    result = await run_turn(body.message, session, context)
 
     await save_context(session_id, context)
-    return result.final_output
+    return result.output
 
 
 @router.post("/sessions/{session_id}/messages/stream")
@@ -77,19 +67,8 @@ async def send_message_stream(session_id: str, body: SendMessageRequest) -> Stre
     session = get_session(session_id)
 
     async def event_generator():
-        try:
-            result = Runner.run_streamed(triage_agent, body.message, session=session, context=context)
-            async for event in result.stream_events():
-                payload = map_stream_event(event)
-                if payload is not None:
-                    yield sse(payload)
-
-            await save_context(session_id, context)
-            final: PlannerResponse = result.final_output
-            yield sse({"type": "final_output", **final.model_dump()})
-        except InputGuardrailTripwireTriggered as e:
-            yield sse({"type": "error", "guardrail": "input", "reasoning": e.guardrail_result.output.output_info})
-        except OutputGuardrailTripwireTriggered as e:
-            yield sse({"type": "error", "guardrail": "output", "reasoning": e.guardrail_result.output.output_info})
+        async for frame in run_turn_streamed(body.message, session, context):
+            yield frame
+        await save_context(session_id, context)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

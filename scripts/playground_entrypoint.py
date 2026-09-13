@@ -21,35 +21,28 @@ import asyncio
 import threading
 
 import opik
-from agents import InputGuardrailTripwireTriggered, OutputGuardrailTripwireTriggered, Runner
 
-from app.agents import sync_prompts_from_opik, triage_agent
+from app.agents import sync_prompts_from_opik
 from app.config import require_openai_api_key
-from app.models import PlannerResponse
+from app.orchestration import run_turn
 from app.sessions import PLAYGROUND_SESSION_ID, get_context, get_session, save_context
 from app.tracing import configure_tracing
 
 
-async def _run_turn(message: str) -> str:
+async def _run_playground_turn(message: str) -> str:
     context = await get_context(PLAYGROUND_SESSION_ID)
     session = get_session(PLAYGROUND_SESSION_ID)
 
-    try:
-        result = await Runner.run(triage_agent, message, session=session, context=context)
-    except InputGuardrailTripwireTriggered as e:
-        return f"[input guardrail tripped] {e.guardrail_result.output.output_info}"
-    except OutputGuardrailTripwireTriggered as e:
-        return f"[output guardrail tripped] {e.guardrail_result.output.output_info}"
-
+    result = await run_turn(message, session, context)
     await save_context(PLAYGROUND_SESSION_ID, context)
 
-    output: PlannerResponse = result.final_output
+    output = result.output
     if output.status == "clarifying_question":
-        return f"[{result.last_agent.name}] {output.message}"
+        return f"[{result.last_agent_name}] {output.message}"
 
     itinerary = output.itinerary
     lines = [
-        f"[{result.last_agent.name}] Itinerary for {itinerary.destination} "
+        f"[{result.last_agent_name}] Itinerary for {itinerary.destination} "
         f"({itinerary.start_date} to {itinerary.end_date}):"
     ]
     for day in itinerary.days:
@@ -67,7 +60,7 @@ async def _run_turn(message: str) -> str:
 def run_trip_planner(message: str) -> str:
     """Send one message to the trip planner's Triage Agent, using the fixed
     playground test session so multi-turn behavior is reachable across runs."""
-    return asyncio.run(_run_turn(message))
+    return asyncio.run(_run_playground_turn(message))
 
 
 require_openai_api_key()

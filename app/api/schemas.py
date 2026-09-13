@@ -3,8 +3,6 @@ SDK-facing models in app/models.py."""
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel
 
 from app.models import PlannerResponse
@@ -28,11 +26,8 @@ class SessionStateResponse(BaseModel):
     running_spent: float
 
 
-class GuardrailErrorResponse(BaseModel):
-    detail: str
-    guardrail: Literal["input", "output"]
-    reasoning: dict
-
-
-# The plain /messages endpoint returns PlannerResponse as-is.
+# The plain /messages endpoint returns PlannerResponse as-is. Guardrail
+# rejections resolve to a clarifying-style PlannerResponse via
+# app/orchestration.py rather than a distinct error shape -- see its
+# module docstring.
 SendMessageResponse = PlannerResponse
