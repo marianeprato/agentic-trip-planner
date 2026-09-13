@@ -101,6 +101,21 @@ async def test_update_trip_details_records_returning_visitor_and_preferences():
     assert context.preferences == ["Kinkaku-ji", "a sushi omakase dinner"]
 
 
+async def test_update_trip_details_reports_no_change_for_repeated_identical_values():
+    """Confirmed live: the routing agent can get stuck calling this
+    repeatedly with unchanged values instead of progressing. Having the
+    tool say so explicitly (rather than silently "succeeding" every time)
+    gives the model something concrete to react to.
+    """
+    context = TripContext()
+
+    first = await _invoke(update_trip_details, context, destination="Kyoto", budget_amount=100.0, budget_currency="GBP")
+    assert first == "Trip details updated."  # still counts as new info the first time
+
+    second = await _invoke(update_trip_details, context, destination="Kyoto", budget_amount=100.0, budget_currency="GBP")
+    assert "nothing changed" in second.lower()
+
+
 async def test_get_place_facts_resolves_via_search_then_fetches_summary(monkeypatch):
     search_response = _make_response({"pages": [{"key": "Kinkaku-ji", "title": "Kinkaku-ji"}]})
     summary_response = _make_response(
@@ -139,6 +154,39 @@ async def test_get_nearby_restaurants_returns_only_named_results():
     assert result[0]["address"] == "1 Kinkaku St"
     assert result[1]["name"] == "Golden Cafe"
     assert result[1]["address"] is None
+
+
+async def test_get_nearby_restaurants_falls_back_to_mirror_after_primary_times_out():
+    geocode_response = _make_response([{"lat": "35.03", "lon": "135.73"}])
+    overpass_success = _make_response({"elements": [{"tags": {"name": "Mirror Diner", "amenity": "restaurant"}}]})
+    timeout_error = httpx.TimeoutException("timed out", request=httpx.Request("POST", "https://x"))
+
+    with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=geocode_response)), patch(
+        "httpx.AsyncClient.post",
+        new=AsyncMock(side_effect=[timeout_error, timeout_error, overpass_success]),
+    ), patch("app.tools.restaurants.asyncio.sleep", new=AsyncMock()):
+        result = await _invoke(get_nearby_restaurants, TripContext(), place="Kinkaku-ji, Kyoto")
+
+    assert len(result) == 1
+    assert result[0]["name"] == "Mirror Diner"
+
+
+async def test_get_nearby_restaurants_degrades_gracefully_when_all_mirrors_fail():
+    geocode_response = _make_response([{"lat": "35.03", "lon": "135.73"}])
+    timeout_error = httpx.TimeoutException("timed out", request=httpx.Request("POST", "https://x"))
+    # 3 mirrors x 2 retries each = 6 total failures before giving up.
+    all_failures = [timeout_error] * 6
+
+    with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=geocode_response)), patch(
+        "httpx.AsyncClient.post", new=AsyncMock(side_effect=all_failures)
+    ), patch("app.tools.restaurants.asyncio.sleep", new=AsyncMock()):
+        result = await _invoke(get_nearby_restaurants, TripContext(), place="Kinkaku-ji, Kyoto")
+
+    # The tool raised; the SDK's default tool-error handling turns that into
+    # a graceful text error for the agent (the same mechanism relied on
+    # everywhere else a tool can fail), not an unhandled exception.
+    assert isinstance(result, str)
+    assert "error occurred" in result.lower()
 
 
 async def test_convert_currency_same_currency_short_circuits():
